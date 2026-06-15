@@ -1,7 +1,7 @@
 import re
 
-# Victorian Driver Licence — exactly 9 digits, word-bounded
-VIC_DL = re.compile(r"\b\d{9}\b")
+# Victorian Driver Licence — 9-digit numeric OR alpha-numeric (letter at start or end)
+VIC_DL = re.compile(r"\b(?:\d{9}|[A-Z]\d{8}|\d{8}[A-Z])\b")
 
 # Victorian number plates — standard (1AB 2CD) and custom (2–6 alphanumeric)
 VIC_PLATE = re.compile(r"\b[A-Z0-9]{2,3}[- ]?[A-Z0-9]{2,3}\b")
