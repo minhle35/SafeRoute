@@ -104,92 +104,83 @@ Maintaining OpenAI API schema compatibility means the gateway is coupled to Open
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                        DEVELOPER ENVIRONMENT                            │
+│                        DEVELOPER WORKFLOW                               │
+│                                                                         │
+│   git commit  →  pre-commit hooks  →  ruff · mypy · pytest             │
+│   git push    →  GitHub Actions CI →  lint · unit · integration · cov  │
+│   PR merged   →  CD pipeline       →  Docker build · staging deploy    │
 │                                                                         │
 │   openai.OpenAI(base_url="http://vicroads-ai-gateway.internal/v1")      │
-│   anthropic.Anthropic(base_url="...")                                   │
-│                                                                         │
-│   ← No code change beyond base_url. All existing SDK calls work.        │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼ Standard OpenAI/Anthropic payload
+│   ← one-line change — all existing SDK calls work unchanged             │
+└──────────────────────────────────┬──────────────────────────────────────┘
+                                   │  HTTP POST /v1/chat/completions
+                                   │  X-Developer-Token: dev-xxxx
+                                   ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                    FASTAPI APPLICATION LAYER                            │
+│                    FASTAPI GUARDRAIL PROXY  (app/)                      │
 │                                                                         │
-│   POST /v1/chat/completions                                             │
-│   POST /v1/messages                                                     │
-│   GET  /health                                                          │
-│   GET  /metrics  (Prometheus scrape endpoint)                           │
+│   POST /v1/chat/completions   POST /v1/messages   GET /health           │
+│   GET  /metrics  ← Prometheus scrape                                    │
 │                                                                         │
-│   Auth middleware → validates developer API key                         │
-│   Rate limiting  → per developer_id token bucket                        │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼ Validated payload enters LiteLLM
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         LITELLM PROXY ENGINE                            │
-│                                                                         │
-│   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │              async_pre_call_hook (FIRES FIRST)                  │   │
-│   │                                                                 │   │
-│   │   vicroads_guardrails.redactor.redact(data["messages"])         │   │
-│   │         │                                                       │   │
-│   │         ├── RegexRedactor                                       │   │
-│   │         │     VIC Driver Licence: \b\d{9}\b and variants        │   │
-│   │         │     Standard plates:   [0-9][A-Z]{2}[0-9][A-Z]{2}    │   │
-│   │         │     Custom plates:     [A-Z]{2,8}                     │   │
-│   │         │                                                       │   │
-│   │         └── SpaCyNERRedactor (en_core_web_sm — LOCAL ONLY)      │   │
-│   │               PERSON → [REDACTED_PERSON]                        │   │
-│   │               GPE    → [REDACTED_LOCATION]                      │   │
-│   │               DATE   → [REDACTED_DATE]                          │   │
-│   │                                                                 │   │
-│   │   data["messages"] mutated IN LOCAL RAM                         │   │
-│   │   ← raw PII value no longer exists in Python process            │   │
-│   └─────────────────────────────────────────────────────────────────┘   │
-│                                    │                                    │
-│                                    ▼                                    │
-│   ┌─────────────────────────────────────────────────────────────────┐   │
-│   │              async_log_success_event (FIRES AFTER)              │   │
-│   │                                                                 │   │
-│   │   vicroads_guardrails.auditor.write_audit_record(               │   │
-│   │       developer_id, model, tokens, pii_detected, redacted_types │   │
-│   │   )  → FastAPI BackgroundTask (non-blocking)                    │   │
-│   └─────────────────────────────────────────────────────────────────┘   │
-│                                    │                                    │
-│   Provider routing: Azure OpenAI · Anthropic · AWS Bedrock · Gemini    │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼ CLEAN, redacted payload only
-┌─────────────────────────────────────────────────────────────────────────┐
-│                      UPSTREAM LLM PROVIDERS                             │
-│                                                                         │
-│   Azure OpenAI    api.azure.com         ← gpt-4o, gpt-4o-mini          │
-│   Anthropic       api.anthropic.com     ← claude-3-5-sonnet             │
-│   AWS Bedrock     bedrock.amazonaws.com ← Titan, Claude on Bedrock      │
-│                                                                         │
-│   ← These services NEVER receive raw Victorian citizen data.            │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                       STORAGE & OBSERVABILITY                           │
-│                                                                         │
-│   SQLite / PostgreSQL                                                   │
-│     audit_logs table (schema above)                                     │
-│     ← pii_detected, redacted_types — no raw PII ever written           │
-│                                                                         │
-│   Prometheus /metrics                                                   │
-│     token_usage_total{developer_id, model}                              │
-│     pii_interceptions_total{redacted_type}                              │
-│     request_latency_seconds{p50, p99}                                   │
-│                                                                         │
-│   Grafana dashboard                                                     │
-│     % of requests with PII detected (compliance health)                 │
-│     Token usage per team (cost governance)                              │
-│     Latency per model (performance monitoring)                          │
-└─────────────────────────────────────────────────────────────────────────┘
+│   ① Auth          validate X-Developer-Token prefix                    │
+│   ② Preflight     token count vs llm_max_tokens                        │
+│   ③ Budget        daily spend check per developer_id                   │
+│   ④ PII Redact    vicroads_guardrails.redactor  (in local RAM)         │
+│   ⑤ LLM Forward  litellm.acompletion  (timeout + fallback chain)      │
+│   ⑥ Cost Ledger   estimate_cost → update daily spend                  │
+│   ⑦ Audit         log_request (stdout) + enqueue write_audit (arq)    │
+└──────────┬───────────────────────────────────┬──────────────────────────┘
+           │                                   │
+           │ ④ redact_messages()               │ ⑦ arq.enqueue(write_audit)
+           ▼                                   ▼
+┌──────────────────────────┐       ┌───────────────────────────────────────┐
+│  vicroads_guardrails/    │       │   TASK QUEUE                          │
+│                          │       │                                       │
+│  patterns.py             │       │   Redis  ← crash-safe task store     │
+│    VIC_DL  \d{9}     │       │   arq worker process                 │
+│    VIC_DL  [A-Z]\d{8}    │       │     → write_audit(AuditRecord)       │
+│    AU_PHONE  04xx...      │       │     → retry on DB failure            │
+│    MEDICARE  [2-6]\d{9}  │       └───────────────────┬───────────────────┘
+│    EMAIL · ADDRESS        │                           │
+│                          │                           │ persists to
+│  redactor.py             │                           ▼
+│    Pass 1 — Regex        │       ┌───────────────────────────────────────┐
+│    Pass 2 — SpaCy NER    │       │   STORAGE LAYER                       │
+│      PERSON → [NAME]     │       │                                       │
+│      GPE    → [LOCATION] │       │   PostgreSQL  audit_logs table        │
+│      ORG    → [ORG]      │       │     request_id · developer_id · model │
+│      DATE * → [DATE]     │       │     pii_detected · redacted_types     │
+│      * skip bare digits  │       │     tokens · cost_usd · latency_ms   │
+│                          │       │     ← no raw PII ever written         │
+│  auditor.py              │       │                                       │
+│    AuditRecord (Pydantic)│       │   Redis  daily spend per developer    │
+│    write_audit (async)   │       └───────────────────┬───────────────────┘
+│                          │                           │
+│  logger.py               │                           │ queried by
+│    JSON → stdout         │                           ▼
+│    JSON → Splunk HEC     │       ┌───────────────────────────────────────┐
+└──────────────────────────┘       │   OBSERVABILITY LAYER                 │
+           │                       │                                       │
+           │ clean redacted        │   Prometheus  scrapes /metrics        │
+           │ payload only          │     pii_interceptions_total           │
+           ▼                       │     request_latency_seconds{p50,p99}  │
+┌──────────────────────────┐       │     token_usage_total{model}          │
+│  UPSTREAM LLM PROVIDERS  │       │                                       │
+│                          │       │   Grafana  dashboards                 │
+│  OpenRouter / OpenAI     │       │     PII detection rate (compliance)   │
+│  Anthropic               │       │     Cost per developer (governance)   │
+│  AWS Bedrock             │       │     Latency per model (performance)   │
+│                          │       │     sources: PostgreSQL + Prometheus  │
+│  ← never see raw PII     │       │                                       │
+└──────────────────────────┘       │   Splunk  indexes JSON audit logs     │
+                                   │     search PII attempts by developer  │
+                                   │     cost spike alerting               │
+                                   └───────────────────────────────────────┘
 ```
+
+> `DATE` entities that are bare digit strings (e.g. `12345678`) are skipped —
+> SpaCy false-positives on numeric IDs. Real dates contain letters or separators
+> (`Jan 2024`, `15/01/2024`).
 
 ### 3.2 The `vicroads_guardrails` Package Structure
 
