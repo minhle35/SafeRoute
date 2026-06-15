@@ -1,25 +1,24 @@
 import time
+
 from fastapi import FastAPI, Request
 
-from fastapi.security.api_key import APIKeyHeader
-
+from app.api import exceptions
+from app.api.route_chat_completion_middleware import router as chat_router
 from app.settings import get_settings
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 
-api_key_header = APIKeyHeader(name=settings.auth_header_name, auto_error=True)
+# Register LiteLLM exception → structured JSON response handlers
+exceptions.register(app)
 
-# In-memory daily spend per developer token.
-# Replace with Redis + TTL in production so it resets at midnight automatically.
-_daily_spend: dict[str, float] = {}
-DAILY_BUDGET_USD = 5.00
+# Mount routers
+app.include_router(chat_router)
 
 
 # =============================================================================
-# MIDDLEWARE — capture request latency for every call
+# MIDDLEWARE
 # =============================================================================
-
 
 @app.middleware("http")
 async def latency_middleware(request: Request, call_next):
@@ -32,7 +31,6 @@ async def latency_middleware(request: Request, call_next):
 # =============================================================================
 # HEALTH
 # =============================================================================
-
 
 @app.get("/health", tags=["Ops"])
 async def health():

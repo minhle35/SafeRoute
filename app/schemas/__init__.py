@@ -1,3 +1,3 @@
-from app.schema.chatMessage import ChatCompletionRequest, ChatMessage
+from app.schemas.chatMessage import ChatCompletionRequest, ChatMessage
 
 __all__ = ["ChatCompletionRequest", "ChatMessage"]
