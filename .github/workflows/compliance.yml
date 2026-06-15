@@ -22,24 +22,21 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          cache-dependency-glob: "app/uv.lock"
+          cache-dependency-glob: "uv.lock"
 
       - name: Set up Python 3.13
         run: uv python install 3.13
-        working-directory: app
 
       - name: Install dependencies (including dev + SpaCy model)
         run: uv sync --all-groups
-        working-directory: app
 
       - name: Run PII redaction test suite
         run: uv run pytest -v --tb=short
-        working-directory: app
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pytest-results-${{ matrix.os }}
-          path: app/.pytest_cache/
+          path: .pytest_cache/
           retention-days: 7
