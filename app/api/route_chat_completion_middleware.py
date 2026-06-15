@@ -1,12 +1,14 @@
 import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 import litellm
 from litellm import ModelResponse
 
 from app.dependencies.auth import validate_developer_token
 from app.schemas.chatMessage import ChatCompletionRequest
 from app.settings import get_settings
+from app.database import write_audit
+from vicroads_guardrails.auditor import AuditRecord
 from vicroads_guardrails.logger import estimate_cost, log_request
 from vicroads_guardrails.redactor import redact_messages
 
@@ -21,6 +23,7 @@ DAILY_BUDGET_USD = 5.00
 @router.post("/v1/chat/completions", tags=["Gateway"])
 async def secure_chat_completion(
     request: ChatCompletionRequest,
+    background_tasks: BackgroundTasks,
     developer_token: str = Depends(validate_developer_token),
 ):
     developer_id = developer_token.removeprefix("Bearer ").strip()
@@ -28,7 +31,7 @@ async def secure_chat_completion(
 
     # ── 1. PRE-FLIGHT: token count ────────────────────────────────────────────
     token_count = litellm.token_counter(
-        model=request.model or settings.default_model,
+        model=request.model,
         messages=messages_dicts,
     )
     if token_count > settings.llm_max_tokens:
@@ -59,7 +62,7 @@ async def secure_chat_completion(
     # ── 4. FORWARD: timeout + fallback chain ─────────────────────────────────
     t0 = time.monotonic()
     response = await litellm.acompletion(
-        model=request.model or settings.default_model,
+        model=request.model,
         messages=clean_messages,
         max_tokens=request.max_tokens,
         temperature=request.temperature,
@@ -73,13 +76,23 @@ async def secure_chat_completion(
     # acompletion without stream=True always returns ModelResponse.
     # The assert narrows the union type for pyright and guards at runtime.
     assert isinstance(response, ModelResponse), "expected non-streaming response"
-    model_name = response.model or settings.default_model
+    model_name = response.model or request.model
     input_tok = response.usage.prompt_tokens  # type: ignore[union-attr]
     output_tok = response.usage.completion_tokens  # type: ignore[union-attr]
     cost = estimate_cost(model_name, input_tok, output_tok)
     _daily_spend[developer_id] = spent + cost
 
-    # ── 6. AUDIT: emit structured JSON log ────────────────────────────────────
+    # ── 6. AUDIT: stdout log + non-blocking DB write ──────────────────────────
+    audit_record = AuditRecord(
+        developer_id=developer_id,
+        model=model_name,
+        pii_detected=bool(redacted_types),
+        redacted_types=redacted_types,
+        input_tokens=input_tok,
+        output_tokens=output_tok,
+        cost_usd=cost,
+        latency_ms=latency_ms,
+    )
     log_request(
         developer_id=developer_id,
         model=model_name,
@@ -90,5 +103,6 @@ async def secure_chat_completion(
         cost_usd=cost,
         latency_ms=latency_ms,
     )
+    background_tasks.add_task(write_audit, audit_record)
 
     return response
