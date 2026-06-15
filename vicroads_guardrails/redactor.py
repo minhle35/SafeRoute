@@ -11,9 +11,10 @@ from .patterns import PATTERNS
 # SpaCy entity labels that map to PII
 _NER_LABEL_MAP = {
     "PERSON": "[REDACTED_NAME]",
-    "GPE":    "[REDACTED_LOCATION]",
-    "LOC":    "[REDACTED_LOCATION]",
-    "ORG":    "[REDACTED_ORG]",
+    "GPE": "[REDACTED_LOCATION]",
+    "LOC": "[REDACTED_LOCATION]",
+    "ORG": "[REDACTED_ORG]",
+    "DATE": "[REDACTED_DATE]",
 }
 
 
@@ -47,7 +48,11 @@ def _redact_text(text: str) -> RedactionResult:
     for ent in reversed(doc.ents):
         replacement = _NER_LABEL_MAP.get(ent.label_)
         if replacement:
-            result.text = result.text[: ent.start_char] + replacement + result.text[ent.end_char :]
+            result.text = (
+                result.text[: ent.start_char]
+                + replacement
+                + result.text[ent.end_char :]
+            )
             tag = replacement.strip("[]")
             if tag not in result.redacted_types:
                 result.redacted_types.append(tag)
