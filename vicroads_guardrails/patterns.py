@@ -8,9 +8,9 @@ VIC_PLATE = re.compile(r"\b[A-Z0-9]{2,3}[- ]?[A-Z0-9]{2,3}\b")
 
 # Australian phone numbers — 04xx xxx xxx mobile or (0x) xxxx xxxx landline
 AU_PHONE = re.compile(
-    r"(?<!\d)(?:\+61\s?|0)4\d{2}\s?\d{3}\s?\d{3}(?!\d)"   # mobile (+ country code or 0)
-    r"|(?<!\d)\(0[2-9]\)\s?\d{4}\s?\d{4}(?!\d)"            # landline with area code
-    r"|\b0[2-9]\d{8}\b"                                     # landline no spaces
+    r"(?<!\d)(?:\+61\s?|0)4\d{2}\s?\d{3}\s?\d{3}(?!\d)"  # mobile (+ country code or 0)
+    r"|(?<!\d)\(0[2-9]\)\s?\d{4}\s?\d{4}(?!\d)"  # landline with area code
+    r"|\b0[2-9]\d{8}\b"  # landline no spaces
 )
 
 # Email addresses
@@ -29,11 +29,10 @@ ADDRESS = re.compile(
 
 # Ordered list: most specific first to avoid partial matches
 PATTERNS: list[tuple[re.Pattern, str]] = [
-    (VIC_DL,      "[REDACTED_VIC_DL]"),
-    (MEDICARE,    "[REDACTED_MEDICARE]"),
-    (AU_PHONE,    "[REDACTED_PHONE]"),
-    (EMAIL,       "[REDACTED_EMAIL]"),
-    (ADDRESS,     "[REDACTED_ADDRESS]"),
-    # VIC_PLATE last — broad pattern, only catches what regex above missed
-    (VIC_PLATE,   "[REDACTED_PLATE]"),
+    (VIC_DL, "[REDACTED_VIC_DL]"),
+    (MEDICARE, "[REDACTED_MEDICARE]"),
+    (AU_PHONE, "[REDACTED_PHONE]"),
+    (EMAIL, "[REDACTED_EMAIL]"),
+    (ADDRESS, "[REDACTED_ADDRESS]"),
+    (VIC_PLATE, "[REDACTED_PLATE]"),
 ]
