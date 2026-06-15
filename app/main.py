@@ -1,13 +1,23 @@
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 
 from app.api import exceptions
 from app.api.route_chat_completion_middleware import router as chat_router
 from app.settings import get_settings
+from app.database import init_db
 
 settings = get_settings()
-app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db(settings.database_url)
+    yield
+
+
+app = FastAPI(title=settings.app_name, version=settings.app_version, lifespan=lifespan)
 
 # Register LiteLLM exception → structured JSON response handlers
 exceptions.register(app)
@@ -20,6 +30,7 @@ app.include_router(chat_router)
 # MIDDLEWARE
 # =============================================================================
 
+
 @app.middleware("http")
 async def latency_middleware(request: Request, call_next):
     start = time.monotonic()
@@ -31,6 +42,7 @@ async def latency_middleware(request: Request, call_next):
 # =============================================================================
 # HEALTH
 # =============================================================================
+
 
 @app.get("/health", tags=["Ops"])
 async def health():
