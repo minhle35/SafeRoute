@@ -37,7 +37,7 @@ Intercepts every inbound prompt in local server memory before LiteLLM constructs
 - **Regex sub-engine** — deterministic, compiled patterns for Victorian-specific identifiers: Driver Licence numbers (9-digit numeric and alpha-numeric variants), standard plate formats (`1AA-2BB`, `AAA-111`), and custom plate patterns
 - **SpaCy NER sub-engine** — local Named Entity Recognition for `PERSON`, `GPE` (locations), `ORG`, and `DATE` entities using `en_core_web_sm`, which runs entirely within the server process
 
-The hook fires inside `async_pre_call_hook` — a LiteLLM middleware interface that mutates the Python dictionary object in local RAM. Because LiteLLM's HTTPX client reads from this same dictionary when constructing the outbound request, the raw PII value is overwritten before any network packet is assembled. This is a structural guarantee, not a best-effort filter.
+Redaction runs in the route handler before `litellm.acompletion()` is called, mutating the Python message list in local RAM. Because LiteLLM's HTTPX client reads from this same list when constructing the outbound request, the raw PII value is overwritten before any network packet is assembled. This is a structural guarantee enforced at the route layer, not a best-effort filter.
 
 **The tradeoff accepted:**  
 SpaCy `en_core_web_sm` adds approximately 80–150ms of latency per request. A larger model (`en_core_web_lg`) would improve NER accuracy but add 300–500ms and significant memory overhead. The small model is the correct tradeoff for a developer sandbox where compliance certainty matters more than throughput, and latency is acceptable.
@@ -187,12 +187,12 @@ Maintaining OpenAI API schema compatibility means the gateway is coupled to Open
 ```
 vicroads_guardrails/
 ├── __init__.py
-├── redactor.py          ← Core interception logic (async_pre_call_hook)
+├── redactor.py          ← Core interception logic (called before acompletion)
 │     RegexRedactor      — Victorian-specific compiled patterns
 │     SpaCyNERRedactor   — Local NER, en_core_web_sm
 │     Redactor           — Orchestrates both, returns RedactionResult
 │
-├── auditor.py           ← Compliance audit writer (async_log_success_event)
+├── auditor.py           ← Compliance schema (AuditRecord Pydantic model)
 │     AuditRecord        — Pydantic schema matching audit_logs table
 │     AuditWriter        — SQLAlchemy async write via BackgroundTasks
 │
@@ -202,15 +202,27 @@ vicroads_guardrails/
 │     VIC_PLATE_CUSTOM   — \b[A-Z]{2,8}\b (with context filtering)
 │     PHONE_AU           — Standard Australian mobile/landline
 │
-├── mcp_server.py        ← MCP tool exposure (one-day addition)
-│     search_with_guardrails(query: str) → GuardrailedResponse
-│     ← Enables Claude Code and MCP-compatible agents to invoke safely
-│
 └── tests/
-      test_redactor.py       — Unit tests per pattern, per entity type
-      test_pii_guarantee.py  — End-to-end compliance guarantee tests
-      test_auditor.py        — Audit record assertions
-      test_mcp_server.py     — MCP tool invocation tests
+      test_redactor.py       — 27 unit tests per pattern, per entity type (pass/fail)
+      test_pii_guarantee.py  — 15 E2E compliance guarantee tests (PII never reaches LLM)
+      test_auditor.py        — 13 audit record persistence tests
+
+benchmarks/
+├── pii_corpus.py            ← Labelled dataset — true positives + true negatives per entity
+│     VIC_DL corpus          — valid DL numbers + 9-digit non-DL strings (refs, ABNs)
+│     MEDICARE corpus        — valid AU Medicare + structurally similar non-Medicare digits
+│     AU_PHONE corpus        — valid AU mobile/landline + digit strings that must not match
+│     EMAIL, ADDRESS, PERSON — positive + negative examples per type
+│
+├── test_pii_accuracy.py     ← Precision / Recall / F1 benchmark runner
+│     runs corpus through _redact_text(), counts TP/FP/FN per entity type
+│     outputs: ACCURACY_REPORT.md
+│
+└── ACCURACY_REPORT.md       ← Generated report committed to repo
+      | Entity   | Precision | Recall | F1   |
+      | VIC_DL   | 1.000     | 1.000  | 1.00 |  ← target
+      | MEDICARE | —         | —      | —    |
+      | ...
 ```
 
 ---
@@ -265,12 +277,116 @@ vicroads_guardrails/
 
 **Decision: SQLite for local development, PostgreSQL for production.** The schema is identical — SQLAlchemy abstracts the difference. Developers can run the gateway locally with no infrastructure dependencies. Production deployment uses PostgreSQL via RDS.
 
+### 4.5 LiteLLM Presidio integration vs. purpose-built `vicroads_guardrails` package
+
+LiteLLM ships a first-party [Microsoft Presidio](https://microsoft.github.io/presidio/) integration that can automatically mask PII in requests. Understanding why we did not use it is important context for anyone maintaining this codebase.
+
+**The Presidio integration is Proxy-only — it does not apply to this architecture**
+
+The LiteLLM Presidio hooks (`mode: "pre_call"`) only fire when running LiteLLM as a standalone Proxy Server process:
+
+```bash
+litellm --config config.yaml --port 4000   # separate process, separate container
+```
+
+These hooks — `async_pre_call_hook`, `async_post_call_success_hook` — are documented as **Proxy-only**. They do **not** fire when calling `litellm.acompletion()` directly from Python, which is how this gateway is built. Our FastAPI app IS the gateway; it calls the LiteLLM SDK directly. Adopting the Presidio integration would require restructuring from:
+
+```
+User → FastAPI gateway  →  litellm.acompletion()  →  LLM provider
+```
+
+to:
+
+```
+User → FastAPI gateway  →  LiteLLM Proxy  →  Presidio containers  →  LLM provider
+```
+
+That adds two extra network hops and three new Docker services (`litellm-proxy`, `presidio-analyzer`, `presidio-anonymizer`) for a redaction capability we already own in-process.
+
+**Even with Presidio deployed, VIC-specific PII requires custom recognizers**
+
+Presidio ships global recognizers tuned to international and US data formats — not Australian jurisdiction-specific identifiers:
+
+| PII Type | Presidio built-in | `vicroads_guardrails` |
+|---|---|---|
+| Victorian Driver Licence | ❌ No `AU_DRIVER_LICENSE`. `US_DRIVER_LICENSE` exists but targets US formats and **false-positives** on 9-digit VIC DL strings (Presidio's own docs warn of this for short alphanumeric strings) | ✅ `r"\b(?:\d{9}|[A-Z]\d{8}|\d{8}[A-Z])\b"` — deterministic, zero false-positives |
+| Australian Medicare | ❌ No `AU_MEDICARE` entity type | ✅ `r"\b[2-6]\d{9}\b"` with leading-digit constraint |
+| Australian phone numbers | Partial — generic `PHONE_NUMBER` does not reliably match `04xx xxx xxx` mobile or `(0x) xxxx xxxx` landline with AU dialling conventions | ✅ AU-specific multi-pattern with negative lookbehind |
+| VIC number plates | ❌ No recognizer | ✅ Standard + custom plate formats |
+| Person names | ✅ ML-based, good recall | ✅ SpaCy `en_core_web_sm` — comparable quality, fully in-process |
+| Email addresses | ✅ `EMAIL_ADDRESS` | ✅ Regex |
+
+Even if Presidio were running, every VIC-specific pattern would still need to be supplied as a `presidio_ad_hoc_recognizers.json` custom recognizer file — which is exactly what `patterns.py` already is. Presidio provides the container infrastructure; we still write the rules.
+
+The LiteLLM Presidio tutorial acknowledges this gap directly under *"Custom Entity Recognition"*: domain-specific identifiers (employee IDs, internal codes, government identifiers) must be written as custom patterns. Victorian government identifiers fall precisely into this category.
+
+**Why SpaCy in-process rather than Presidio for name detection**
+
+Presidio's analyzer does use a more capable NLP model for person names than `en_core_web_sm`. However, running Presidio as a sidecar means:
+
+- An HTTP call to the `presidio-analyzer` container on every request — adding 50–200ms inside the redaction path
+- Text leaving the Python process boundary, even to a localhost sidecar — the data custody requirement (§4.2) requires text to remain within the server process
+- An additional infrastructure dependency that must be healthy for every request
+
+SpaCy runs entirely in-process. The latency cost (~80–150ms) is accepted as a tradeoff in §4.3. Replacing SpaCy with Presidio is a valid upgrade path if name-detection accuracy gaps emerge in production; it is not the right first choice.
+
+**Decision: purpose-built `vicroads_guardrails` package, direct SDK.**  
+`redact_messages()` called before `litellm.acompletion()` is not a workaround — it is the correct architecture for an embedded gateway that must enforce jurisdiction-specific compliance rules without external dependencies. The Presidio path would add infrastructure overhead without removing the need to write a single pattern in `patterns.py`.
+
+### 4.6 PII Detection Accuracy — Benchmark Design
+
+`test_redactor.py` proves that specific hand-crafted inputs are redacted correctly. It does not measure detection rates across a representative population of real-world inputs. The claims in §4.5 and §5 Finding 4 require empirical evidence:
+
+- §4.5 states VIC DL detection is "deterministic, zero false-positives" — this is currently an assertion, not a measurement
+- §5 Finding 4 states generic proxies cannot handle Victorian identifiers — this needs a side-by-side recall comparison to be citable
+
+**What a unit test proves vs. what a benchmark proves:**
+
+| | `test_redactor.py` | `benchmarks/test_pii_accuracy.py` |
+|---|---|---|
+| Purpose | Does this exact input get redacted? | What fraction of real inputs are handled correctly? |
+| Failures caught | Broken regex, wrong replacement token | False negatives (PII missed), false positives (non-PII flagged) |
+| Corpus | Hand-picked to pass | Adversarial negatives designed to probe false-positive rate |
+| Output | Pass / fail | Precision / Recall / F1 per entity type |
+
+**Corpus design — the critical piece is the negative set:**
+
+Each entity type needs two sides of the corpus:
+
+| Entity | True positive examples | True negative examples (must NOT be redacted) |
+|---|---|---|
+| `VIC_DL` | `123456789`, `A12345678`, `12345678Z` | 9-digit ABN fragments, postcodes (`3000`), reference IDs (`REF-123456789`) |
+| `MEDICARE` | `2123456701`, `6987654321` | 10-digit phone numbers starting with `0`, BSB + account combos |
+| `AU_PHONE` | `0412 345 678`, `(03) 9000 1234` | Fax numbers in text, international numbers `+44 7700...` |
+| `EMAIL` | `jane@example.com` | Malformed addresses `user@`, partial domains |
+| `ADDRESS` | `42 Collins Street` | Business names containing street words `"Road Safety Inc"` |
+| `PERSON` (SpaCy) | `"John Smith submitted"` | Single common words `"Victoria"`, organisation names |
+
+**Expected output table** (`benchmarks/ACCURACY_REPORT.md`):
+
+| Entity type | TP | FP | FN | Precision | Recall | F1 |
+|---|---|---|---|---|---|---|
+| VIC_DL | — | — | — | target: 1.00 | target: 1.00 | target: 1.00 |
+| MEDICARE | — | — | — | — | — | — |
+| AU_PHONE | — | — | — | — | — | — |
+| EMAIL | — | — | — | — | — | — |
+| ADDRESS | — | — | — | — | — | — |
+| PERSON (SpaCy NER) | — | — | — | expected lower | expected lower | — |
+
+SpaCy NER for `PERSON` is expected to have lower recall than the regex patterns — the benchmark quantifies the gap and determines whether it is acceptable or whether a larger model is warranted.
+
+**What the benchmark validates beyond the existing test suite:**
+
+1. The "zero false-positives" claim for `VIC_DL` becomes `Precision(VIC_DL) = 1.0` — verifiable and auditable
+2. `Recall(PERSON)` quantifies what §6 acknowledges: "SpaCy NER engine will miss edge cases"
+3. Provides evidence for §5 Finding 4: comparing recall on VIC DL corpus between our regex and Presidio's `US_DRIVER_LICENSE` recogniser (which would score near 0 on VIC format)
+
 ---
 
 ## 5. Key Findings
 
 **Finding 1 — The structural guarantee is stronger than a test guarantee.**  
-Because `async_pre_call_hook` mutates the message dictionary in local Python memory before LiteLLM's HTTPX client constructs the outbound request object, it is structurally impossible for a raw PII value to appear in the network packet. This is not "we tested it and it didn't leak" — it is "the architecture prevents the leak at the object level." The test suite proves the hook fires correctly. The architecture proves that if the hook fires, leakage cannot occur.
+Because `redact_messages()` mutates the Python message list in local RAM before `litellm.acompletion()` is called, it is structurally impossible for a raw PII value to appear in the outbound network packet — LiteLLM's HTTPX client reads from this same list when constructing the request. This is not "we tested it and it didn't leak" — it is "the architecture prevents the leak at the object level." The compliance test suite (`test_pii_guarantee.py`) proves this by capturing the exact `messages` argument passed to the mocked `acompletion()` and asserting no raw PII appears in it.
 
 **Finding 2 — The audit schema must not store what it is protecting against.**  
 Storing the raw prompt in the audit log would create a secondary repository of citizen data, which would itself require the same data custody controls as the primary systems. `redacted_types` provides auditors with proof of enforcement without this liability. This is the correct design for a regulated environment.
@@ -295,16 +411,16 @@ It is also **not** a claim that all PII will be detected. The regex engine is de
 
 ## 7. What Gets Built — Summary
 
-| Component | Layer | Who builds it | Time |
+| Component | Status | Layer | Location |
 |---|---|---|---|
-| FastAPI proxy app | Infrastructure | `app/` | Phase 1 — 3 days |
-| `vicroads_guardrails` package | Compliance | `vicroads_guardrails/` | Phase 2 — 5 days |
-| Audit schema + async writer | Compliance | `vicroads_guardrails/auditor.py` | Phase 3 — 2 days |
-| Prometheus + Grafana | Observability | `docker-compose.yml` | Phase 3 — 1 day |
-| Compliance test suite | Quality | `tests/test_pii_guarantee.py` | Phase 4 — 3 days |
-| `pii-leak-check` CI gate | Quality | `.github/workflows/compliance.yml` | Phase 4 — 1 day |
-| `DEVELOPER_RUNBOOK.md` (RLS-AI-001) | Enablement | Docs | Phase 4 — 2 days |
-| MCP server wrapper | Platform | `vicroads_guardrails/mcp_server.py` | Extension — 1 day |
-
-**Total estimated build time:** 18 days part-time.  
-**Core compliance features (Phases 1–2):** 8 days.
+| FastAPI proxy app — auth, budget, PII, audit | ✅ Done | Infrastructure | `app/` |
+| `vicroads_guardrails` package — patterns, redactor, auditor | ✅ Done | Compliance | `vicroads_guardrails/` |
+| Audit schema + async DB writer | ✅ Done | Compliance | `app/database.py`, `app/models/` |
+| Compliance test suite — 55 tests (unit + E2E) | ✅ Done | Quality | `tests/` |
+| CI pipeline — lint, type-check, pytest on push | ✅ Done | Quality | `.github/workflows/compliance.yml` |
+| OpenRouter integration — API key propagation, `OR_SITE_URL` | ✅ Done | Infrastructure | `app/main.py`, `app/settings.py` |
+| PII detection accuracy benchmark — corpus + precision/recall/F1 | 🔲 Next | Quality | `benchmarks/` |
+| Prometheus metrics endpoint — `GET /metrics` | 🔲 Planned | Observability | `app/api/route_metrics.py` |
+| Grafana dashboard — PII rate, cost, latency | 🔲 Planned | Observability | `docker-compose.yml` |
+| `DEVELOPER_RUNBOOK.md` (RLS-AI-001) | 🔲 Planned | Enablement | `DEVELOPER_RUNBOOK.md` |
+| MCP server wrapper | 🔲 Planned | Platform | `vicroads_guardrails/mcp_server.py` |
