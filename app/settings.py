@@ -26,8 +26,12 @@ class Settings(BaseSettings):
     auth_header_name: str = "X-Developer-Token"
     dev_token_prefix: str = "dev-"
 
-    # LLM routing via LiteLLM
+    # LLM routing via LiteLLM + OpenRouter
     openrouter_api_key: str = ""
+    # OR_SITE_URL / OR_APP_NAME are sent as HTTP-Referer / X-Title headers to OpenRouter.
+    # They appear in the OpenRouter dashboard and are used for per-app rate limit tracking.
+    or_site_url: str = "https://vicroads-ai-gateway.internal"
+    or_app_name: str = "VicRoads SafeRoute"
     default_model: str = "openrouter/google/gemma-4-27b-it:free"
     llm_timeout: int = 300
     llm_max_tokens: int = 1600
