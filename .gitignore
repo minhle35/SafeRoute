@@ -11,3 +11,10 @@ wheels/
 
 # .env file
 .env
+
+# pytest artifacts
+.benchmarks/
+.pytest_cache/
+
+# SQLite dev database
+*.db
