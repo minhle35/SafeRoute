@@ -139,7 +139,8 @@ CORPUS: list[CorpusEntry] = [
     CorpusEntry("Check AI CD pipeline deployment status.", "REDACTED_PLATE", False, "PLATE/TN/tech-abbrev-known-fp"),
     # Safe TNs: digit-only strings too short or too long, lowercase context
     CorpusEntry("section 42 of the traffic regulations", "REDACTED_PLATE", False, "PLATE/TN/section-lowercase"),
-    CorpusEntry("postcode for Melbourne CBD is 3000", "REDACTED_PLATE", False, "PLATE/TN/postcode-lowercase"),
+    # KNOWN GAP: 3000 matches as first-group=30, sep=empty, second-group=00
+    CorpusEntry("postcode for Melbourne CBD is 3000", "REDACTED_PLATE", False, "PLATE/TN/postcode-digits-known-fp"),
 
     # ── REDACTED_NAME (SpaCy PERSON) ────────────────────────────────────────────
     # Source: redactor.py  _NER_LABEL_MAP["PERSON"] = "[REDACTED_NAME]"

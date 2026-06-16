@@ -151,19 +151,30 @@ def generate_report(metrics: list[EntityMetrics]) -> str:
         "## Known gaps",
         "",
         "- **VIC_DL** — word boundary `\\b` fires between a hyphen separator and the "
-        "first digit, so `REF-123456789` is counted as a false-positive. "
+        "first digit, so `REF-123456789` is a false-positive (FP). "
         "Fix: add negative lookbehind `(?<!-)` to the pattern.",
-        "- **VIC_PLATE** — `[A-Z0-9]{2,3}[- ]?[A-Z0-9]{2,3}` is intentionally broad "
-        "to cover both standard and custom formats. Common uppercase abbreviations "
-        "(`NO GO`, `AI CD`) produce false-positives. "
-        "Context filtering (require preceding `plate`/`rego` keyword) would reduce FPs "
+        "- **VIC_PLATE / uppercase abbreviations** — `[A-Z0-9]{2,3}[- ]?[A-Z0-9]{2,3}` "
+        "is intentionally broad to cover both standard and custom plate formats. "
+        "Common uppercase word pairs (`NO GO`, `AI CD`) trigger false-positives. "
+        "Context filtering (require a preceding `plate`/`rego` keyword) would reduce FPs "
         "at the cost of recall on bare-plate references in audit logs.",
-        "- **SpaCy NER** (NAME, LOCATION, ORG, DATE) — `en_core_web_sm` accuracy is "
-        "lower than the regex engine. Recall gaps on unusual name formats and ambiguous "
-        "entities are expected and quantified in the table above.",
-        "- **DATE** — bare all-digit strings (e.g. `20240115`) are intentionally "
-        "skipped by the `isdigit()` guard in `redactor.py` to avoid false-positives "
-        "on numeric IDs. This reduces recall for date-formatted-as-digits inputs.",
+        "- **VIC_PLATE / short digit strings** — `3000` matches as `30` (2-digit first group) "
+        "+ empty separator + `00` (2-digit second group), producing a FP on postcodes. "
+        "Requiring at least one alphabetic character in each group would eliminate this.",
+        "- **SpaCy ORG / AU-specific organisations** — `en_core_web_sm` misses single-token "
+        "Australian organisation names (`VicRoads`, `RACV`) that are absent from its "
+        "training corpus. These appear as false-negatives (FN). "
+        "Upgrade path: `en_core_web_lg` or a custom NER component.",
+        "- **SpaCy LOCATION / regional cities** — smaller Victorian cities (e.g. `Ballarat`) "
+        "are not reliably tagged as GPE by the small model. FN for location entities "
+        "that aren't state capitals or internationally prominent.",
+        "- **SpaCy DATE / dd/mm/yyyy format** — `01/06/2025` is not detected as a DATE "
+        "by `en_core_web_sm` (model trained predominantly on US-format dates). "
+        "Written-form dates (`15 January 1985`, `March 2023`) are correctly detected.",
+        "- **DATE / bare digits** — bare all-digit strings (e.g. `20240115`) are "
+        "intentionally skipped by the `isdigit()` guard in `redactor.py` to avoid "
+        "false-positives on numeric IDs. This trades recall on compact date formats "
+        "for precision on 8-digit reference numbers.",
     ]
     return "\n".join(lines) + "\n"
 
