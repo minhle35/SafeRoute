@@ -11,6 +11,12 @@ from app.database import write_audit
 from vicroads_guardrails.auditor import AuditRecord
 from vicroads_guardrails.logger import estimate_cost, log_request
 from vicroads_guardrails.redactor import redact_messages
+from app.api.route_metrics import (
+    pii_interceptions_total,
+    request_latency_seconds,
+    token_usage_total,
+    request_cost_usd_total,
+)
 
 settings = get_settings()
 router = APIRouter()
@@ -109,5 +115,13 @@ async def secure_chat_completion(
         latency_ms=latency_ms,
     )
     background_tasks.add_task(write_audit, audit_record)
+
+    # ── 7. METRICS: increment Prometheus counters ─────────────────────────────
+    for tag in redacted_types:
+        pii_interceptions_total.labels(entity_type=tag).inc()
+    request_latency_seconds.labels(model=model_name).observe(latency_ms / 1000)
+    token_usage_total.labels(model=model_name, direction="input").inc(input_tok)
+    token_usage_total.labels(model=model_name, direction="output").inc(output_tok)
+    request_cost_usd_total.labels(developer_id=developer_id).inc(cost)
 
     return response
