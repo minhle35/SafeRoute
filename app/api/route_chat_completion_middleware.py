@@ -73,9 +73,14 @@ async def secure_chat_completion(
     latency_ms = (time.monotonic() - t0) * 1000
 
     # ── 5. COST: update spend ledger ─────────────────────────────────────────
-    # acompletion without stream=True always returns ModelResponse.
-    # The assert narrows the union type for pyright and guards at runtime.
-    assert isinstance(response, ModelResponse), "expected non-streaming response"
+    if not isinstance(response, ModelResponse):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "unexpected_response_type",
+                "detail": "LLM returned a streaming object but stream=True was not requested.",
+            },
+        )
     model_name = response.model or request.model
     input_tok = response.usage.prompt_tokens  # type: ignore[union-attr]
     output_tok = response.usage.completion_tokens  # type: ignore[union-attr]
