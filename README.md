@@ -128,54 +128,50 @@ Maintaining OpenAI API schema compatibility means the gateway is coupled to Open
 │   4. PII Redact    vicroads_guardrails.redactor  (in local RAM)         │
 │   5. LLM Forward  litellm.acompletion  (timeout + fallback chain)       │
 │   6. Cost Ledger   estimate_cost → update daily spend                   │
-│   7. Audit         log_request (stdout) + enqueue write_audit (arq)     │
+│   7. Audit         log_request (stdout) + BackgroundTasks(write_audit)  │
 └──────────┬───────────────────────────────────┬──────────────────────────┘
            │                                   │
-           │ 4. redact_messages()              │ 7. arq.enqueue(write_audit)
-           ▼                                   ▼
-┌──────────────────────────┐       ┌───────────────────────────────────────┐
-│  vicroads_guardrails/    │       │   TASK QUEUE                          │
-│                          │       │                                       │
-│  patterns.py             │       │   Redis  ← crash-safe task store      │
-│    VIC_DL  "\d{9}"       │       │   arq worker process                  │
-│    VIC_DL  [A-Z]\d{8}    │       │     → write_audit(AuditRecord)        │ 
-│    AU_PHONE  04xx...     │       │     → retry on DB failure             │
-│    MEDICARE  [2-6]\d{9}  │       └───────────────────┬───────────────────┘
-│    EMAIL · ADDRESS       │                           │
-│                          │                           │ persists to
-│  redactor.py             │                           ▼
-│    Pass 1 — Regex        │       ┌───────────────────────────────────────┐
-│    Pass 2 — SpaCy NER    │       │   STORAGE LAYER                       │
-│      PERSON → [NAME]     │       │                                       │
-│      GPE    → [LOCATION] │       │   PostgreSQL  audit_logs table        │
-│      ORG    → [ORG]      │       │     request_id · developer_id · model │
-│      DATE * → [DATE]     │       │     pii_detected · redacted_types     │
-│      * skip bare digits  │       │     tokens · cost_usd · latency_ms    │
-│                          │       │     ← no raw PII ever written         │
-│  auditor.py              │       │                                       │
-│    AuditRecord (Pydantic)│       │   Redis  daily spend per developer    │
-│    write_audit (async)   │       └───────────────────┬───────────────────┘
-│                          │                           │
-│  logger.py               │                           │ queried by
-│    JSON → stdout         │                           ▼
-│    JSON → Splunk HEC     │       ┌───────────────────────────────────────┐
-└──────────────────────────┘       │   OBSERVABILITY LAYER                 │
-           │                       │                                       │
-           │ clean redacted        │   Prometheus  scrapes /metrics        │
-           │ payload only          │     pii_interceptions_total           │
-           ▼                       │     request_latency_seconds{p50,p99}  │
-┌──────────────────────────┐       │     token_usage_total{model}          │
-│  UPSTREAM LLM PROVIDERS  │       │                                       │
-│                          │       │   Grafana  dashboards                 │
-│  OpenRouter / OpenAI     │       │     PII detection rate (compliance)   │
-│  Anthropic               │       │     Cost per developer (governance)   │
-│  AWS Bedrock             │       │     Latency per model (performance)   │
-│                          │       │     sources: PostgreSQL + Prometheus  │
-│  ← never see raw PII     │       │                                       │
-└──────────────────────────┘       │   Splunk  indexes JSON audit logs     │
-                                   │     search PII attempts by developer  │
-                                   │     cost spike alerting               │
-                                   └───────────────────────────────────────┘
+           │ 4. redact_messages()              │ 7. background_tasks
+           ▼                                   │    .add_task(write_audit)
+┌──────────────────────────┐                   ▼
+│  vicroads_guardrails/    │       ┌───────────────────────────────────────┐
+│                          │       │   STORAGE LAYER                       │
+│  patterns.py             │       │                                       │
+│    VIC_DL  "\d{9}"       │       │   SQLite (dev) / PostgreSQL (prod)    │
+│    VIC_DL  [A-Z]\d{8}    │       │   configured via DATABASE_URL         │
+│    AU_PHONE  04xx...     │       │   audit_logs table                    │
+│    MEDICARE  [2-6]\d{9}  │       │     request_id · developer_id · model │
+│    EMAIL · ADDRESS       │       │     pii_detected · redacted_types     │
+│                          │       │     tokens · cost_usd · latency_ms    │
+│  redactor.py             │       │     ← no raw PII ever written         │
+│    Pass 1 — Regex        │       │                                       │
+│    Pass 2 — SpaCy NER    │       │   _daily_spend: dict[str, float]      │
+│      PERSON → [NAME]     │       │     in-process · resets on restart    │
+│      GPE    → [LOCATION] │       └───────────────────┬───────────────────┘
+│      ORG    → [ORG]      │                           │
+│      DATE * → [DATE]     │                           │ scraped by
+│      * skip bare digits  │                           ▼
+│                          │       ┌───────────────────────────────────────┐
+│  auditor.py              │       │   OBSERVABILITY LAYER                 │
+│    AuditRecord (dataclass│       │                                       │
+│    write_audit (async)   │       │   Prometheus  scrapes GET /metrics    │
+│                          │       │     pii_interceptions_total           │
+│  logger.py               │       │     request_latency_seconds           │
+│    JSON → stdout only    │       │     token_usage_total · cost_total    │
+└──────────────────────────┘       │                                       │
+           │                       │   Grafana  (auto-provisioned)         │
+           │ clean redacted        │     PII detection rate (compliance)   │
+           │ payload only          │     Cost per developer (governance)   │
+           ▼                       │     Latency per model (performance)   │
+┌──────────────────────────┐       │     source: Prometheus /metrics       │
+│  UPSTREAM LLM PROVIDERS  │       └───────────────────────────────────────┘
+│                          │
+│  OpenRouter (all models) │
+│  ← one API key covers    │
+│    all providers         │
+│                          │
+│  ← never see raw PII     │
+└──────────────────────────┘
 ```
 
 > `DATE` entities that are bare digit strings (e.g. `12345678`) are skipped —
@@ -188,41 +184,49 @@ Maintaining OpenAI API schema compatibility means the gateway is coupled to Open
 vicroads_guardrails/
 ├── __init__.py
 ├── redactor.py          ← Core interception logic (called before acompletion)
-│     RegexRedactor      — Victorian-specific compiled patterns
-│     SpaCyNERRedactor   — Local NER, en_core_web_sm
-│     Redactor           — Orchestrates both, returns RedactionResult
+│     _redact_text()     — single-string redaction, returns RedactionResult
+│     redact_messages()  — iterates all message dicts, returns (messages, tags)
+│     RedactionResult    — dataclass: text, redacted_types, pii_detected
+│     _load_nlp()        — lru_cache(1) SpaCy model loader
 │
-├── auditor.py           ← Compliance schema (AuditRecord Pydantic model)
-│     AuditRecord        — Pydantic schema matching audit_logs table
-│     AuditWriter        — SQLAlchemy async write via BackgroundTasks
+├── auditor.py           ← Compliance record
+│     AuditRecord        — frozen dataclass, auto-generates UUID + UTC timestamp
+│     write_audit()      — async SQLAlchemy insert via BackgroundTasks
 │
-├── patterns.py          ← Victorian PII regex definitions (documented)
-│     VIC_DRIVER_LICENCE — 9-digit numeric: \b\d{9}\b
-│     VIC_PLATE_STANDARD — [0-9][A-Z]{2}[\-]?[0-9][A-Z]{2}
-│     VIC_PLATE_CUSTOM   — \b[A-Z]{2,8}\b (with context filtering)
-│     PHONE_AU           — Standard Australian mobile/landline
+├── patterns.py          ← Victorian PII regex definitions
+│     VIC_DL             — \b(?:\d{9}|[A-Z]\d{8}|\d{8}[A-Z])\b
+│     VIC_PLATE          — \b[A-Z0-9]{2,3}[- ]?[A-Z0-9]{2,3}\b
+│     AU_PHONE           — mobile 04xx + landline (0x) xxxx xxxx
+│     EMAIL              — standard RFC-5321 subset
+│     MEDICARE           — \b[2-6]\d{9}\b
+│     ADDRESS            — number + street name + street type
+│     PATTERNS           — ordered list, most-specific first
 │
-└── tests/
-      test_redactor.py       — 27 unit tests per pattern, per entity type (pass/fail)
-      test_pii_guarantee.py  — 15 E2E compliance guarantee tests (PII never reaches LLM)
-      test_auditor.py        — 13 audit record persistence tests
+└── logger.py            ← Structured logging + cost estimation
+      log_request()      — emits one JSON line per request to stdout
+      estimate_cost()    — per-model price table, returns float USD
+
+tests/                   ← top-level, separate from the package
+├── test_redactor.py         — 27 unit tests per pattern, per entity type
+├── test_pii_guarantee.py    — 15 E2E compliance tests (PII never reaches LLM)
+└── test_auditor.py          — 13 audit DB persistence tests
 
 benchmarks/
-├── pii_corpus.py            ← Labelled dataset — true positives + true negatives per entity
-│     VIC_DL corpus          — valid DL numbers + 9-digit non-DL strings (refs, ABNs)
-│     MEDICARE corpus        — valid AU Medicare + structurally similar non-Medicare digits
-│     AU_PHONE corpus        — valid AU mobile/landline + digit strings that must not match
-│     EMAIL, ADDRESS, PERSON — positive + negative examples per type
+├── pii_corpus.py            ← 103 CorpusEntry(frozen=True) labelled entries
+│     10 entity tags, TP + TN per type, adversarial negatives included
 │
-├── test_pii_accuracy.py     ← Precision / Recall / F1 benchmark runner
-│     runs corpus through _redact_text(), counts TP/FP/FN per entity type
-│     outputs: ACCURACY_REPORT.md
+├── test_pii_accuracy.py     ← Precision / Recall / F1 runner
+│     parametrize over corpus, runs _redact_text(), counts TP/FP/FN
+│     script mode writes ACCURACY_REPORT.md
 │
-└── ACCURACY_REPORT.md       ← Generated report committed to repo
-      | Entity   | Precision | Recall | F1   |
-      | VIC_DL   | 1.000     | 1.000  | 1.00 |  ← target
-      | MEDICARE | —         | —      | —    |
-      | ...
+└── ACCURACY_REPORT.md       ← Committed report — current results (June 2026)
+      | Entity    | Precision | Recall |  F1   |
+      | MEDICARE  |   1.000   |  1.000 | 1.000 |
+      | EMAIL     |   1.000   |  1.000 | 1.000 |
+      | VIC_DL    |   1.000   |  0.909 | 0.952 |
+      | VIC_PLATE |   0.667   |  1.000 | 0.800 |  ← known FPs (see E2E_test.md §6)
+      | LOCATION  |   1.000   |  0.857 | 0.923 |  ← Ballarat FN
+      | DATE      |   1.000   |  0.750 | 0.857 |  ← slash-format FN
 ```
 
 ---
@@ -423,3 +427,49 @@ It is also **not** a claim that all PII will be detected. The regex engine is de
 | Prometheus metrics endpoint — `GET /metrics` | ✅ Done | Observability | `app/api/route_metrics.py` |
 | Grafana dashboard — PII rate, cost, latency | ✅ Done | Observability | `docker-compose.yml` |
 | `DEVELOPER_RUNBOOK.md` (RLS-AI-001) | 🔲 Planned | Enablement | `DEVELOPER_RUNBOOK.md` |
+
+---
+
+## 8. Documentation Index
+
+The documents below elaborate on specific aspects of the system. They are written to be read in the order listed — each one builds on the preceding context.
+
+### System Design
+
+Detailed design rationale for each technology layer. Start here to understand **why** each component was chosen and how it fits together.
+
+| Document | Covers |
+|---|---|
+| [`design_docs/vicroads_guardrails.md`](design_docs/vicroads_guardrails.md) | Two-pass redaction pipeline internals, pattern ordering, public API, why it is a standalone package |
+| [`design_docs/litellm.md`](design_docs/litellm.md) | SDK vs Proxy distinction, OpenRouter model routing, env var bridge, cost/fallback design |
+| [`design_docs/logging.md`](design_docs/logging.md) | Stdout JSON log structure, async audit DB, why both systems run together |
+| [`design_docs/prometheus.md`](design_docs/prometheus.md) | All four metric definitions, scrape config, why metrics vs logs for time-series data |
+| [`design_docs/grafana.md`](design_docs/grafana.md) | Dashboard panels and PromQL, auto-provisioning mechanism, Grafana vs Splunk tradeoff |
+
+### Installation
+
+Step-by-step setup from `git clone` to running tests, sending live requests, and reading accuracy reports.
+
+→ [`INSTALL.md`](INSTALL.md)
+
+### Testing
+
+**Read these in order** — each document is a layer above the previous one.
+
+| Document | Covers |
+|---|---|
+| [`tests/TESTING_STRATEGY.md`](tests/TESTING_STRATEGY.md) | All strategies considered (unit, ASGI, integration, corpus, E2E), tradeoff table, why each strategy was chosen for its target |
+| [`tests/E2E_test.md`](tests/E2E_test.md) | Deep design decisions behind `test_pii_guarantee.py` — ASGI transport, mock boundary, fixture scoping, the 8 benchmark failures with root cause and fix path |
+
+**Running the tests:**
+
+```bash
+# Unit + integration + E2E (55 tests, CI default)
+uv run pytest tests/ -v --cov=vicroads_guardrails --cov=app --cov-report=term-missing
+
+# Full suite including accuracy benchmark (103 entries)
+uv run pytest tests/ benchmarks/ -v
+
+# Generate ACCURACY_REPORT.md with F1 per entity type
+uv run python benchmarks/test_pii_accuracy.py
+```
