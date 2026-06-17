@@ -31,7 +31,19 @@ jobs:
         run: uv sync --all-groups
 
       - name: Run PII redaction test suite
-        run: uv run pytest -v --tb=short
+        run: |
+          uv run pytest -v --tb=short \
+            --cov=vicroads_guardrails --cov=app \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage.xml
+          retention-days: 14
 
       - name: Upload test results
         if: always()
@@ -40,3 +52,12 @@ jobs:
           name: pytest-results-${{ matrix.os }}
           path: .pytest_cache/
           retention-days: 7
+        
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          flags: ${{ matrix.os }}
+          name: codecov-${{ matrix.os }}
+          fail_ci_if_error: true
