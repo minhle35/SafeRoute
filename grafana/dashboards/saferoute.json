@@ -1,0 +1,109 @@
+{
+  "title": "SafeRoute — VicRoads AI Gateway",
+  "uid": "saferoute-v1",
+  "schemaVersion": 38,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "PII Detection Rate (compliance)",
+      "description": "Rate of PII interceptions per second. Spikes indicate developers sending raw citizen data.",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum(rate(pii_interceptions_total[5m]))",
+          "legendFormat": "PII interceptions/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": { "mode": "fixed", "fixedColor": "red" }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "PII by Entity Type (last 1 h)",
+      "description": "Breakdown of which PII types are being detected. Informs developer training priorities.",
+      "type": "piechart",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by(entity_type) (increase(pii_interceptions_total[1h]))",
+          "legendFormat": "{{entity_type}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Request Latency P95 by Model (performance)",
+      "description": "P95 end-to-end latency per model. Baseline includes ~80–150 ms SpaCy redaction pass.",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by(le, model) (rate(request_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{model}}"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum by(le, model) (rate(request_latency_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Cost per Developer — last 24 h (governance)",
+      "description": "Estimated USD spend per developer_id. Daily budget limit is $5.00.",
+      "type": "bargauge",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by(developer_id) (increase(request_cost_usd_total[24h]))",
+          "legendFormat": "{{developer_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": 0,   "color": "green" },
+              { "value": 3.5, "color": "yellow" },
+              { "value": 5.0, "color": "red" }
+            ]
+          }
+        }
+      },
+      "options": { "orientation": "horizontal" }
+    },
+    {
+      "id": 5,
+      "title": "Token Burn Rate (capacity)",
+      "description": "Input and output tokens consumed per second across all models.",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 8 },
+      "datasource": "Prometheus",
+      "targets": [
+        {
+          "expr": "sum by(direction) (rate(token_usage_total[5m]))",
+          "legendFormat": "{{direction}} tokens/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short" }
+      }
+    }
+  ]
+}

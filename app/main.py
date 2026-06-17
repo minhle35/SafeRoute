@@ -3,11 +3,13 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api import exceptions
 from app.api.route_chat_completion_middleware import router as chat_router
-from app.settings import get_settings
 from app.database import init_db
+from app.settings import get_settings
 
 settings = get_settings()
 
@@ -60,3 +62,8 @@ async def latency_middleware(request: Request, call_next):
 @app.get("/health", tags=["Ops"])
 async def health():
     return {"status": "ok", "guardrail": "active"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
