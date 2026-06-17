@@ -74,7 +74,7 @@ async def secure_chat_completion(
         temperature=request.temperature,
         timeout=settings.llm_timeout,
         num_retries=2,
-        fallbacks=["gpt-3.5-turbo"],
+        fallbacks=["openrouter/openai/gpt-3.5-turbo"],
     )
     latency_ms = (time.monotonic() - t0) * 1000
 

@@ -420,7 +420,7 @@ It is also **not** a claim that all PII will be detected. The regex engine is de
 | CI pipeline — lint, type-check, pytest on push | ✅ Done | Quality | `.github/workflows/compliance.yml` |
 | OpenRouter integration — API key propagation, `OR_SITE_URL` | ✅ Done | Infrastructure | `app/main.py`, `app/settings.py` |
 | PII detection accuracy benchmark — corpus + precision/recall/F1 | ✅ Done | Quality | `benchmarks/` |
-| Prometheus metrics endpoint — `GET /metrics` | 🔲 Planned | Observability | `app/api/route_metrics.py` |
-| Grafana dashboard — PII rate, cost, latency | 🔲 Planned | Observability | `docker-compose.yml` |
+| Prometheus metrics endpoint — `GET /metrics` | ✅ Done | Observability | `app/api/route_metrics.py` |
+| Grafana dashboard — PII rate, cost, latency | ✅ Done | Observability | `docker-compose.yml` |
 | `DEVELOPER_RUNBOOK.md` (RLS-AI-001) | 🔲 Planned | Enablement | `DEVELOPER_RUNBOOK.md` |
 | MCP server wrapper | 🔲 Planned | Platform | `vicroads_guardrails/mcp_server.py` |
