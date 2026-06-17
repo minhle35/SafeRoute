@@ -106,9 +106,9 @@ Maintaining OpenAI API schema compatibility means the gateway is coupled to Open
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                        DEVELOPER WORKFLOW                               │
 │                                                                         │
-│   git commit  →  pre-commit hooks  →  ruff · mypy · pytest             │
-│   git push    →  GitHub Actions CI →  lint · unit · integration · cov  │
-│   PR merged   →  CD pipeline       →  Docker build · staging deploy    │
+│   git commit  →  pre-commit hooks  →  ruff · mypy · pytest              │
+│   git push    →  GitHub Actions CI →  lint · unit · integration · cov   │
+│   PR merged   →  CD pipeline       →  Docker build · staging deploy     │
 │                                                                         │
 │   openai.OpenAI(base_url="http://vicroads-ai-gateway.internal/v1")      │
 │   ← one-line change — all existing SDK calls work unchanged             │
@@ -122,26 +122,26 @@ Maintaining OpenAI API schema compatibility means the gateway is coupled to Open
 │   POST /v1/chat/completions   POST /v1/messages   GET /health           │
 │   GET  /metrics  ← Prometheus scrape                                    │
 │                                                                         │
-│   ① Auth          validate X-Developer-Token prefix                    │
-│   ② Preflight     token count vs llm_max_tokens                        │
-│   ③ Budget        daily spend check per developer_id                   │
-│   ④ PII Redact    vicroads_guardrails.redactor  (in local RAM)         │
-│   ⑤ LLM Forward  litellm.acompletion  (timeout + fallback chain)      │
-│   ⑥ Cost Ledger   estimate_cost → update daily spend                  │
-│   ⑦ Audit         log_request (stdout) + enqueue write_audit (arq)    │
+│   1. Auth          validate X-Developer-Token prefix                    │
+│   2. Preflight     token count vs llm_max_tokens                        │
+│   3. Budget        daily spend check per developer_id                   │
+│   4. PII Redact    vicroads_guardrails.redactor  (in local RAM)         │
+│   5. LLM Forward  litellm.acompletion  (timeout + fallback chain)       │
+│   6. Cost Ledger   estimate_cost → update daily spend                   │
+│   7. Audit         log_request (stdout) + enqueue write_audit (arq)     │
 └──────────┬───────────────────────────────────┬──────────────────────────┘
            │                                   │
-           │ ④ redact_messages()               │ ⑦ arq.enqueue(write_audit)
+           │ 4. redact_messages()              │ 7. arq.enqueue(write_audit)
            ▼                                   ▼
 ┌──────────────────────────┐       ┌───────────────────────────────────────┐
 │  vicroads_guardrails/    │       │   TASK QUEUE                          │
 │                          │       │                                       │
-│  patterns.py             │       │   Redis  ← crash-safe task store     │
-│    VIC_DL  \d{9}     │       │   arq worker process                 │
-│    VIC_DL  [A-Z]\d{8}    │       │     → write_audit(AuditRecord)       │
-│    AU_PHONE  04xx...      │       │     → retry on DB failure            │
+│  patterns.py             │       │   Redis  ← crash-safe task store      │
+│    VIC_DL  "\d{9}"       │       │   arq worker process                  │
+│    VIC_DL  [A-Z]\d{8}    │       │     → write_audit(AuditRecord)        │ 
+│    AU_PHONE  04xx...     │       │     → retry on DB failure             │
 │    MEDICARE  [2-6]\d{9}  │       └───────────────────┬───────────────────┘
-│    EMAIL · ADDRESS        │                           │
+│    EMAIL · ADDRESS       │                           │
 │                          │                           │ persists to
 │  redactor.py             │                           ▼
 │    Pass 1 — Regex        │       ┌───────────────────────────────────────┐
@@ -150,7 +150,7 @@ Maintaining OpenAI API schema compatibility means the gateway is coupled to Open
 │      GPE    → [LOCATION] │       │   PostgreSQL  audit_logs table        │
 │      ORG    → [ORG]      │       │     request_id · developer_id · model │
 │      DATE * → [DATE]     │       │     pii_detected · redacted_types     │
-│      * skip bare digits  │       │     tokens · cost_usd · latency_ms   │
+│      * skip bare digits  │       │     tokens · cost_usd · latency_ms    │
 │                          │       │     ← no raw PII ever written         │
 │  auditor.py              │       │                                       │
 │    AuditRecord (Pydantic)│       │   Redis  daily spend per developer    │
@@ -423,4 +423,3 @@ It is also **not** a claim that all PII will be detected. The regex engine is de
 | Prometheus metrics endpoint — `GET /metrics` | ✅ Done | Observability | `app/api/route_metrics.py` |
 | Grafana dashboard — PII rate, cost, latency | ✅ Done | Observability | `docker-compose.yml` |
 | `DEVELOPER_RUNBOOK.md` (RLS-AI-001) | 🔲 Planned | Enablement | `DEVELOPER_RUNBOOK.md` |
-| MCP server wrapper | 🔲 Planned | Platform | `vicroads_guardrails/mcp_server.py` |
