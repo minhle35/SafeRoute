@@ -18,8 +18,8 @@ Full setup from `git clone` to running tests and reading results.
 ## 1. Clone the Repository
 
 ```bash
-git clone https://github.com/minhle35/lightLLM.git
-cd lightLLM
+git clone https://github.com/minhle35/SafeRoute.git
+cd SafeRoute
 ```
 
 ---
