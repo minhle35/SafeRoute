@@ -426,7 +426,7 @@ It is also **not** a claim that all PII will be detected. The regex engine is de
 | PII detection accuracy benchmark — corpus + precision/recall/F1 | ✅ Done | Quality | `benchmarks/` |
 | Prometheus metrics endpoint — `GET /metrics` | ✅ Done | Observability | `app/api/route_metrics.py` |
 | Grafana dashboard — PII rate, cost, latency | ✅ Done | Observability | `docker-compose.yml` |
-| `DEVELOPER_RUNBOOK.md` (RLS-AI-001) | 🔲 Planned | Enablement | `DEVELOPER_RUNBOOK.md` |
+
 
 ---
 
@@ -473,3 +473,46 @@ uv run pytest tests/ benchmarks/ -v
 # Generate ACCURACY_REPORT.md with F1 per entity type
 uv run python benchmarks/test_pii_accuracy.py
 ```
+
+---
+
+## 9. Screenshots — Observability Walkthrough
+
+The sequence below mirrors the actual operator workflow: send a request as a developer, confirm Prometheus is scraping the gateway, inspect individual metrics, then view them aggregated in Grafana. See [`design_docs/prometheus.md`](design_docs/prometheus.md) and [`design_docs/grafana.md`](design_docs/grafana.md) for the design rationale behind each metric and panel.
+
+### 9.1 Sending a request as a developer
+
+A request authenticated with `X-Developer-Token: dev-<id>` ([§3.1](#31-component-overview), auth step) — this is what produces the data shown in every screenshot below.
+
+![Developer curl request](<assets/curl_cmd_developer_request.png>)
+
+### 9.2 Confirming Prometheus is scraping the gateway
+
+Before trusting any metric value, confirm the `saferoute` scrape target is `UP` and the server's runtime is healthy.
+
+![Prometheus target status — scrape running](<assets/Promothesus_Dashboard_Running.png>)
+![Prometheus runtime info](<assets/Prometheus_Dashboard_Runtime_Info.png>)
+
+### 9.3 Querying individual metrics (raw PromQL)
+
+Each metric defined in [`app/api/route_metrics.py`](app/api/route_metrics.py), queried directly in the Prometheus UI:
+
+| Metric | Answers | Screenshot |
+|---|---|---|
+| `pii_interceptions_total` | Which PII entity types were redacted? | ![PII interceptions by entity type](<assets/Promothesus_Dashboard_pii_interceptions_total — showsPIIdetections by_entity_type.png>) |
+| `request_latency_seconds_bucket` | Latency histogram buckets | ![Latency histogram buckets](<assets/Promothesus_Dashboard_request_latency_seconds_bucket—latency histogram_buckets.png>) |
+| `token_usage_total` | Token consumption by model/direction | ![Token usage total](<assets/Promothesus_Dashboard_TokekUsageTotal.png>) |
+| `request_cost_usd_total` | Cumulative spend per developer | ![Request cost per developer](<assets/Promothesus_Dashboard_RequestCost.png>) |
+
+### 9.4 TSDB status — confirming the four metrics dominate storage
+
+Prometheus's built-in TSDB status page (`/tsdb-status`) confirms the gateway's four custom metrics are the primary series being recorded, rather than noise from unrelated scrape targets.
+
+![TSDB top 10 metrics by series count](<assets/Promethesus_Dashboard_TSDB_metrics_top_10.png>)
+![TSDB top 10 metrics by usage](<assets/Promethesus_Dashboard_TSDB_metrics_top10_usage.png>)
+
+### 9.5 Grafana — the aggregated view
+
+The same four metrics rendered as the `saferoute-v1` dashboard ([§4 of `grafana.md`](design_docs/grafana.md)) — PII detection rate, PII by entity type, latency P95, cost per developer, and token burn rate, in one auto-provisioned view.
+
+![SafeRoute Grafana dashboard](<assets/Grafana_dashboard.png>)
