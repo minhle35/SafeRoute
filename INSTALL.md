@@ -130,20 +130,39 @@ Known FP patterns (e.g. VIC_PLATE matching `AI CD`, `NO GO`) are documented in `
 
 ## 7. Start the Full Stack (Docker)
 
-Starts the FastAPI gateway, Prometheus, and Grafana together:
+Starts the FastAPI gateway, Prometheus, and Grafana together. If ports 8000, 9090, or 3000 are already taken by something else on your machine (common when running multiple projects), use the `make up` target instead of `docker compose up` directly — it auto-finds free ports first:
 
 ```bash
-docker compose up --build
+make up
 ```
 
-| Service | URL | Description |
+This runs [`scripts/find_ports.sh`](scripts/find_ports.sh), which scans a 50-port window above each default (8000, 9090, 3000), writes the first free port for each into `.env` as `APP_PORT` / `PROMETHEUS_PORT` / `GRAFANA_PORT`, then builds and starts the stack. `docker-compose.yml` reads these via `${APP_PORT:-8000}` substitution, so nothing breaks if you skip this and run `docker compose up --build` directly on a machine with no conflicts.
+
+Check `.env` after `make up` to see which ports were actually assigned:
+
+```bash
+grep PORT .env
+```
+
+| Service | Default URL | Description |
 |---|---|---|
 | Gateway API | `http://localhost:8000` | OpenAI-compatible chat endpoint |
 | API Docs | `http://localhost:8000/docs` | Interactive Swagger UI |
 | Prometheus | `http://localhost:9090` | Raw metrics browser |
 | Grafana | `http://localhost:3000` | Pre-built SafeRoute dashboard |
 
-Direct dashboard link: `http://localhost:3000/d/saferoute-v1/`
+(Substitute the actual assigned ports from `.env` if `make up` picked different ones.)
+
+Direct dashboard link: `http://localhost:<GRAFANA_PORT>/d/saferoute-v1/`
+
+Other Makefile targets:
+
+```bash
+make ports     # only resolve free ports and write .env, don't start anything
+make down      # stop the stack
+make restart   # re-resolve ports and rebuild — use after editing .env or code
+make logs      # follow logs for all services
+```
 
 ### Send a test request
 
@@ -180,7 +199,7 @@ docker compose logs app | grep pii_detected
 ## 8. Stopping the Stack
 
 ```bash
-docker compose down          # stop containers, keep volumes
+make down                    # stop containers, keep volumes
 docker compose down -v       # stop containers and remove volumes (reset Grafana/Prometheus data)
 ```
 
@@ -189,13 +208,13 @@ docker compose down -v       # stop containers and remove volumes (reset Grafana
 ## Troubleshooting
 
 **`401 User not found` from OpenRouter**
-Your `OPENROUTER_API_KEY` in `.env` is invalid. Get a new key at openrouter.ai/keys and restart: `docker compose down && docker compose up`.
+Your `OPENROUTER_API_KEY` in `.env` is invalid, or you rotated it without restarting. `docker-compose.yml` uses `env_file: .env`, which is only read when a container is *created* — editing `.env` does not propagate to an already-running container. Recreate it: `make restart` (or `docker compose up -d --force-recreate app`).
 
 **SpaCy model not found (`E050`)**
 Run `uv sync --all-groups` — the model is a Python wheel and must be installed before the app starts.
 
 **Port already in use**
-Change `SERVER_PORT` in `.env` and update the port mapping in `docker-compose.yml` to match.
+Run `make up` instead of `docker compose up` directly — it runs [`scripts/find_ports.sh`](scripts/find_ports.sh) first, which finds a free port within 50 of each default and writes it to `.env`. Run `make ports` alone if you just want to see which ports would be assigned without starting anything.
 
 **Grafana dashboard empty**
 Navigate directly to `http://localhost:3000/d/saferoute-v1/` — dashboards are not starred by default.

@@ -452,6 +452,8 @@ Step-by-step setup from `git clone` to running tests, sending live requests, and
 
 → [`INSTALL.md`](INSTALL.md)
 
+If ports 8000, 9090, or 3000 are already in use on your machine, run `make up` instead of `docker compose up` directly — it auto-finds free ports first. See [INSTALL.md §7](INSTALL.md#7-start-the-full-stack-docker) for details.
+
 ### Testing
 
 **Read these in order** — each document is a layer above the previous one.
