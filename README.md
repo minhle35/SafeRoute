@@ -8,6 +8,27 @@
 
 ---
 
+## Table of Contents
+
+A quick map of what's in this document and why it's there.
+
+| Section | What you'll find |
+|---|---|
+| [1. The Problem This Project Exists to Solve](#1-the-problem-this-project-exists-to-solve) | The legal/compliance reason this gateway exists — VicRoads citizen data must never reach a third-party LLM API |
+| [2. The Three Highest-Priority Features](#2-the-three-highest-priority-features) | The three load-bearing features, ranked, with the reasoning behind each |
+| ↳ [Priority 1 — Zero-Trust PII Redaction](#priority-1--zero-trust-pii-redaction-the-compliance-guarantee) | The compliance guarantee — how PII is intercepted before it ever leaves the server |
+| ↳ [Priority 2 — Compliance-First Audit Schema](#priority-2--compliance-first-audit-schema-the-proof-of-enforcement) | How enforcement is proven to auditors without storing the sensitive data itself |
+| ↳ [Priority 3 — Drop-In SDK Compatibility](#priority-3--drop-in-sdk-compatibility-the-adoption-guarantee) | Why developer adoption is treated as a compliance requirement, not a UX nice-to-have |
+| [3. System Architecture](#3-system-architecture) | Full component diagram and the `vicroads_guardrails` package structure |
+| [4. Research: Tradeoffs Evaluated](#4-research-tradeoffs-evaluated) | Build-vs-extend, local-vs-cloud NER, SQLite-vs-Postgres, and why Presidio wasn't used — with decision tables |
+| [5. Key Findings](#5-key-findings) | The four core engineering/design insights from building this |
+| [6. What This Project Is Not](#6-what-this-project-is-not) | Explicit scope boundaries — what this gateway does *not* claim to solve |
+| [7. What Gets Built — Summary](#7-what-gets-built--summary) | Status table of every component, done vs. planned |
+| [8. Documentation Index](#8-documentation-index) | Links to design docs, install guide, and test strategy docs |
+| [9. Screenshots — Observability Walkthrough](#9-screenshots--observability-walkthrough) | Live Prometheus/Grafana screenshots showing the system running end-to-end |
+
+---
+
 ## 1. The Problem This Project Exists to Solve
 
 VicRoads Registration and Licensing Services is scaling its digital transformation by encouraging software engineering teams to leverage Large Language Models. This creates an immediate and non-negotiable conflict.
